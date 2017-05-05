@@ -3,21 +3,30 @@ import h5py
 import pyroaring as roaring
 import pytoml as toml
 import re
+from scipy import sparse
 
 from . import reversepolish as rpn
 
 MAXROWS = 2**32
 
 class MapFile:
-    def __init__(self, filepath, mode='a'):
-        mode += '+b'
-        if (not os.path.isfile(filepath)) and mode[0] in {'w', 'a'}:
+    def __init__(self, filepath, mode='r'):
+        self._mode = mode
+        try:
+            fmode = {
+                'r': 'rb',
+                'rw': 'r+b'
+            }[self._mode]
+        except KeyError:
+            raise ValueError('invalid mode')
+            
+        if (not os.path.isfile(filepath)) and self._mode == 'rw':
             with open(filepath, 'wb') as fp:
                 b = roaring.BitMap()
-                roaring.dump(fp, b)
+                fp.write(b.serialize())
             
-        self._fp = open(filepath, mode)
-        self.map = roaring.load(self._fp)
+        self._fp = open(filepath, fmode)
+        self.map = roaring.BitMap.deserialize(self._fp.read())
 
     def __enter__(self):
         return self
@@ -26,10 +35,11 @@ class MapFile:
         self.close()
 
     def dump(self):
-        roaring.dump(self._fp, self.map)
+        self._fp.write(self.map.serialize())
 
     def close(self):
-        self.dump()
+        if self._mode == 'rw':
+            self.dump()
         self._fp.close()
 
 class SparseColumn:
@@ -59,7 +69,7 @@ class SparseColumn:
                     f.create_dataset(o, s, dtype=dt, maxshape=(None,))
 
         if not os.path.isfile(self._filepaths['map']):
-            with MapFile(self._filepaths['map']) as bmf:
+            with MapFile(self._filepaths['map'], 'rw') as bmf:
                 pass
 
     def get_map(self):
@@ -99,7 +109,7 @@ class SparseColumn:
         bmf.map.update(indices)
 
     def put_data_blocks(self, blocksize, csr_blocks):
-        with h5py.File(self._filepaths['data'], 'a') as h5f, MapFile(self._filepaths['map'], 'a') as bmf:
+        with h5py.File(self._filepaths['data'], 'a') as h5f, MapFile(self._filepaths['map'], 'rw') as bmf:
             for bi, b in csr_blocks:
                 self._append_data(h5f, bmf, b.data, b.indices + bi*blocksize, b.indptr, (1, self._maxrows))
         
@@ -172,13 +182,13 @@ class SparseDB:
         b = self._rpn.execute(statement)
         return list(b)
 
-    def get_data(self, indices, cols):
+    def get_data(self, indices=None, cols=None):
         if cols is None:
             cols = self._meta['cols']
         if indices is None:
-            return sparse.vcat(self._cols[c].get_data() for c in cols).T
+            return sparse.vstack(self._cols[c].get_data() for c in cols).T
         else:
-            return sparse.vcat(self._cols[c].get_data()[1, indices] for c in cols).T
+            return sparse.vstack(self._cols[c].get_data()[1, indices] for c in cols).T
 
     def put_data_blocks(self, blocksize, csr_blocks):
         raise NotImplementedError
