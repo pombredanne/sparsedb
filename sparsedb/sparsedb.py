@@ -26,7 +26,9 @@ class MapFile:
                 fp.write(b.serialize())
             
         self._fp = open(filepath, fmode)
-        self.map = roaring.BitMap.deserialize(self._fp.read())
+        buff = self._fp.read()
+        self._fp.seek(0)
+        self.map = roaring.BitMap.deserialize(buff)
 
     def __enter__(self):
         return self
@@ -35,7 +37,8 @@ class MapFile:
         self.close()
 
     def dump(self):
-        self._fp.write(self.map.serialize())
+        buff = self.map.serialize()
+        self._fp.write(buff)
 
     def close(self):
         if self._mode == 'rw':
@@ -111,7 +114,7 @@ class SparseColumn:
     def put_data_blocks(self, blocksize, csr_blocks):
         with h5py.File(self._filepaths['data'], 'a') as h5f, MapFile(self._filepaths['map'], 'rw') as bmf:
             for bi, b in csr_blocks:
-                self._append_data(h5f, bmf, b.data, b.indices + bi*blocksize, b.indptr, (1, self._maxrows))
+                self._append_data(h5f, bmf, b.data, b.indices + bi*blocksize)
         
 class SparseDB:
     def __init__(self, path, name):
