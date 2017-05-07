@@ -5,7 +5,7 @@ based on sparsity patterns
 
 ## status
 
-seems to work.  use at your peril
+seems to work.  not optimised.  use at your peril
 
 ## usage
 
@@ -34,7 +34,7 @@ else:
     sdb.attach()
 
 # find rows based on arbitrary sparsity patterns
-# query language uses reverse polish notation with logical ops & | ^ !
+# query language uses reverse polish notation with logical ops & | ^ - !
 idx = sdb.find('col1 col2 col3 & |')
 
 # get data corresponding to found rows
