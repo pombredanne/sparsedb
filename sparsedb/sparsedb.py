@@ -136,14 +136,14 @@ class SparseDB:
             '|': lambda x, y: x | y,
             '^': lambda x, y: x ^ y,
             '-': lambda x, y: x - y,
-            '!': lambda x: x.flip(0, MAXROWS-1)
+            '!': lambda x: x.flip(0, self.get_shape()[0])
         }
         unwrapper = lambda c: self._cols[self._colidx[c]].get_map() \
-            if c in self._meta['cols'] else c
+            if type(c) == str and c in self._meta['cols'] else c
         self._rpn = rpn.ReversePolish(tokeniser, dispatcher, unwrapper)
         
     def _format(self, statement):
-        return ' '.join(self._fmtpat.sub(' \\1 ', statement).split(' '))
+        return ' '.join(self._fmtpat.sub(' \\1 ', statement).split())
 
     def _set_paths(self, path):
         self._paths = {
@@ -156,6 +156,16 @@ class SparseDB:
         os.makedirs(self._paths['/'], exist_ok=True)
         os.makedirs(self._paths['/cols'], exist_ok=True)
 
+    def _read_meta(self):
+        with open(self._filepaths['meta'], 'r') as fp:
+            self._meta = toml.load(fp)
+            if len(self._meta['cols']) != self._meta['shape'][1]:
+                raise ValueError('inconsistent meta data')
+
+    def _write_meta(self):
+        with open(self._filepaths['meta'], 'w') as fp:
+            toml.dump(self._meta, fp, sort_keys=True)
+
     def exists(self):
         return os.path.isfile(self._filepaths['meta'])
 
@@ -167,11 +177,10 @@ class SparseDB:
             raise ValueError('repeated column names')
 
         self._meta = {
-            'cols': cols
+            'cols': cols,
+            'shape': [0, len(cols)]
         }
-
-        with open(self._filepaths['meta'], 'w') as fp:
-            toml.dump(self._meta, fp, sort_keys=True)
+        self._write_meta()
         
         self.attach()
 
@@ -179,8 +188,7 @@ class SparseDB:
         if not self.exists():
             raise ValueError('database does not exist')
 
-        with open(self._filepaths['meta'], 'r') as fp:
-            self._meta = toml.load(fp)
+        self._read_meta()
 
         self._colidx = {c:i for i,c in enumerate(self._meta['cols'])}
         self._cols = [SparseColumn(self._paths['/cols'], c) for c in self._meta['cols']]
@@ -188,6 +196,9 @@ class SparseDB:
     def find(self, statement):
         b = self._rpn.execute(statement)
         return list(b)
+
+    def get_shape(self):
+        return tuple(self._meta['shape'])
 
     def get_data(self, indices=None, cols=None):
         if cols is None:
@@ -198,8 +209,11 @@ class SparseDB:
             return sparse.vstack(self._cols[self._colidx[c]].get_data()[0, indices] for c in cols).T
 
     def put_data_blocks(self, blocksize, csr_blocks):
+        maxbi = 0
         for bi,blk in csr_blocks:
+            maxbi = max(maxbi, bi)
             blkc = blk.tocsc()
             for i,c in enumerate(blkc.T):
                 self._cols[i].put_data_blocks(blocksize, [(bi,c)])
-            
+            self._meta['shape'][0] = (maxbi+1)*blocksize
+            self._write_meta()
