@@ -6,6 +6,7 @@ based on sparsity patterns (wip)
 ## usage
 
 ```python
+from itertools import product
 from scipy import sparse
 from sparsedb import SparseDB
 
