@@ -48,7 +48,7 @@ class MapFile:
 class SparseColumn:
     def __init__(self, path, name):
         self.name = name
-        self._maxrows = MAXROWS
+        self.shape = (1,0)
         self._paths = None
         self._set_paths(path)
 
@@ -67,9 +67,10 @@ class SparseColumn:
         os.makedirs(self._paths['/data'], exist_ok=True)
 
         if not os.path.isfile(self._filepaths['data']):
-            with h5py.File(self._filepaths['data'], 'w') as f:
-                for o,s,dt in ( ('data',(0,),'f'), ('indices',(0,),'i'), ('indptr',(2,),'i'), ('shape',(2,),'i')):
-                    f.create_dataset(o, s, dtype=dt, maxshape=(None,))
+            with h5py.File(self._filepaths['data'], 'w') as h5f:
+                h5f.create_dataset('shape', (2,), dtype='i')
+                h5f['.']['shape'][:] = self.shape
+                h5f.create_dataset('data', (0,), dtype='f', maxshape=(None,))
 
         if not os.path.isfile(self._filepaths['map']):
             with MapFile(self._filepaths['map'], 'rw') as bmf:
@@ -81,19 +82,17 @@ class SparseColumn:
 
     def get_data(self):
         with h5py.File(self._filepaths['data'], 'r') as h5f:
-            data0 = h5f['.']['data']
-            indices0 = h5f['.']['indices']
-            indptr0 = h5f['.']['indptr']
-            shape0 = h5f['.']['shape']
+            shape = h5f['.']['shape']
+            data = h5f['.']['data']
+            indices = self.get_map()
+            indptr = (0,len(data))
 
-            return sparse.csr_matrix((data0, indices0, indptr0), shape=shape0)
+            return sparse.csr_matrix((data, indices, indptr), shape=shape)
 
-    def _append_data(self, h5f, bmf, data, indices):
+    def _append_data(self, h5f, bmf, data, indices, shape):
         # create refs to hdf5 data
-        data0 = h5f['.']['data']
-        indices0 = h5f['.']['indices']
-        indptr0 = h5f['.']['indptr']
         shape0 = h5f['.']['shape']
+        data0 = h5f['.']['data']
 
         # update hdf5 data
         l0 = len(data0)
@@ -101,20 +100,25 @@ class SparseColumn:
         data0.resize((l0+l,))
         data0[l0:] = data
 
-        indices0.resize((l0+l,))
-        indices0[l0:] = indices
-
-        indptr0[:] = (0, l0+l)
-
-        shape0[:] = (1, self._maxrows)
+        self.shape = (1, max(shape[1],self.shape[1]))
+        shape0[:] = self.shape
 
         # update map data
         bmf.map.update(indices)
 
     def put_data_blocks(self, blocksize, csr_blocks):
         with h5py.File(self._filepaths['data'], 'a') as h5f, MapFile(self._filepaths['map'], 'rw') as bmf:
+            maxbi = 0
             for bi, b in csr_blocks:
-                self._append_data(h5f, bmf, b.data, b.indices + bi*blocksize)
+                if b.shape[0] != 1 or b.shape[1] != blocksize:
+                    raise ValueError('invalid block shape in block %d: %s != (1,%d)' % 
+                        (bi, b.shape, blocksize))
+
+                maxbi = max(maxbi, bi)
+                self._append_data(h5f, bmf,
+                    data = b.data,
+                    indices = b.indices + bi*blocksize,
+                    shape = (1, (maxbi+1)*blocksize))
         
 class SparseDB:
     def __init__(self, path, name):
@@ -189,14 +193,13 @@ class SparseDB:
         if cols is None:
             cols = self._meta['cols']
         if indices is None:
-            return sparse.vstack(self._cols[c].get_data() for c in cols).T
+            return sparse.vstack(self._cols[self._colidx[c]].get_data() for c in cols).T
         else:
-            return sparse.vstack(self._cols[c].get_data()[1, indices] for c in cols).T
+            return sparse.vstack(self._cols[self._colidx[c]].get_data()[0, indices] for c in cols).T
 
     def put_data_blocks(self, blocksize, csr_blocks):
-        raise NotImplementedError
         for bi,blk in csr_blocks:
             blkc = blk.tocsc()
             for i,c in enumerate(blkc.T):
-                self._cols[i].put_data_blocks([(bi,c)])
+                self._cols[i].put_data_blocks(blocksize, [(bi,c)])
             
