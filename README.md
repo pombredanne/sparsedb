@@ -1,7 +1,11 @@
 # sparsedb
 
 silly non-database for storing and querying large sparse matrices
-based on sparsity patterns (wip)
+based on sparsity patterns
+
+## status
+
+seems to work.  use at your peril
 
 ## usage
 
